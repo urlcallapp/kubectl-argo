@@ -158,7 +158,7 @@ kubectl argo get pods -n checkout-prod --app us-east1-prod-payments-team-checkou
 
 Other familiar `kubectl` verbs (`describe`, `exec`, `apply`, `get deploy`, `get -A`, ...) are **not** implemented yet; only the resource types above are translated into Argo CD API calls.
 
-**Sample output:**
+**Sample output** (illustrative - not captured from a live Argo CD server):
 
 ```console
 $ kubectl argo get pods -n payments-prod
