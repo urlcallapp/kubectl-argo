@@ -29,7 +29,7 @@ type ResolvedApp struct {
 type namespaceCacheFile struct {
 	ServerAddr string                 `json:"server_addr"`
 	UpdatedAt  time.Time              `json:"updated_at"`
-	Mappings   map[string]ResolvedApp `json:"mappings"`
+	Mappings   map[string][]ResolvedApp `json:"mappings"`
 }
 
 // Resolver translates a developer-facing Kubernetes namespace (-n <namespace>)
@@ -41,7 +41,7 @@ type Resolver struct {
 	forceRefresh bool
 
 	mu       sync.RWMutex
-	mappings map[string]ResolvedApp
+	mappings map[string][]ResolvedApp
 }
 
 // ResolverOption configures optional Resolver behavior.
@@ -67,7 +67,7 @@ func NewResolver(client *Client, opts ...ResolverOption) *Resolver {
 		client:    client,
 		cachePath: defaultCacheFilePath(),
 		cacheTTL:  defaultCacheTTL,
-		mappings:  make(map[string]ResolvedApp),
+		mappings:  make(map[string][]ResolvedApp),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -78,29 +78,25 @@ func NewResolver(client *Client, opts ...ResolverOption) *Resolver {
 // ResolveNamespace looks up the Argo CD Application name that manages the given Kubernetes namespace.
 // It checks the in-memory/disk cache first (unless forceRefresh is enabled), and automatically falls back
 // to calling ApplicationService.List on a cache miss.
-func (r *Resolver) ResolveNamespace(ctx context.Context, namespace string) (*ResolvedApp, error) {
+func (r *Resolver) ResolveNamespace(ctx context.Context, namespace string, appName string) (*ResolvedApp, error) {
 	ns := strings.TrimSpace(namespace)
 	if ns == "" {
 		return nil, fmt.Errorf("namespace cannot be empty: specify a namespace with -n/--namespace")
 	}
+	appName = strings.TrimSpace(appName)
 
-	// 1. Check in-memory map first.
+	// 1. Check in-memory map first. pick returns (nil, nil) only when the
+	// namespace is not in the map at all, so fall through to a refresh then.
 	if !r.forceRefresh {
-		r.mu.RLock()
-		if app, ok := r.mappings[ns]; ok {
-			r.mu.RUnlock()
-			return &app, nil
+		if app, err := r.pick(ns, appName); app != nil || err != nil {
+			return app, err
 		}
-		r.mu.RUnlock()
 
 		// 2. Attempt to load from the local disk cache if still within TTL.
 		if err := r.loadDiskCache(); err == nil {
-			r.mu.RLock()
-			if app, ok := r.mappings[ns]; ok {
-				r.mu.RUnlock()
-				return &app, nil
+			if app, err := r.pick(ns, appName); app != nil || err != nil {
+				return app, err
 			}
-			r.mu.RUnlock()
 		}
 	}
 
@@ -109,18 +105,76 @@ func (r *Resolver) ResolveNamespace(ctx context.Context, namespace string) (*Res
 		return nil, err
 	}
 
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	app, ok := r.mappings[ns]
-	if !ok {
+	app, err := r.pick(ns, appName)
+	if err != nil {
+		return nil, err
+	}
+	if app == nil {
 		return nil, fmt.Errorf(
 			"no Argo CD application found targeting namespace %q (verify the namespace name and your Argo CD RBAC permissions)",
 			ns,
 		)
 	}
 
-	return &app, nil
+	return app, nil
+}
+
+// pick selects the ResolvedApp for a namespace. When several Applications target the
+// same namespace it returns an ambiguity error naming the candidates, unless appName
+// selects one explicitly (--app flag).
+func (r *Resolver) pick(ns, appName string) (*ResolvedApp, error) {
+	r.mu.RLock()
+	matches := append([]ResolvedApp(nil), r.mappings[ns]...)
+	r.mu.RUnlock()
+
+	if len(matches) == 0 {
+		return nil, nil
+	}
+
+	if appName != "" {
+		for i := range matches {
+			if matches[i].AppName == appName {
+				return &matches[i], nil
+			}
+		}
+		return nil, fmt.Errorf(
+			"application %q does not target namespace %q (candidates: %s)",
+			appName, ns, describeMatches(matches),
+		)
+	}
+
+	if len(matches) > 1 {
+		return nil, fmt.Errorf(
+			"namespace %q is targeted by %d Argo CD applications; select one explicitly with --app:\n%s",
+			ns, len(matches), describeMatches(matches),
+		)
+	}
+
+	return &matches[0], nil
+}
+
+// describeMatches renders one "name (cluster, project)" entry per candidate Application.
+func describeMatches(matches []ResolvedApp) string {
+	lines := make([]string, 0, len(matches))
+	for _, app := range matches {
+		cluster := app.DestinationName
+		if cluster == "" {
+			cluster = app.DestinationServer
+		}
+		entry := "  - " + app.AppName
+		var details []string
+		if cluster != "" {
+			details = append(details, "cluster: "+cluster)
+		}
+		if app.Project != "" {
+			details = append(details, "project: "+app.Project)
+		}
+		if len(details) > 0 {
+			entry += " (" + strings.Join(details, ", ") + ")"
+		}
+		lines = append(lines, entry)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Refresh fetches all accessible applications via ApplicationService.List,
@@ -137,7 +191,7 @@ func (r *Resolver) Refresh(ctx context.Context) error {
 		return fmt.Errorf("failed to list Argo CD applications via ApplicationService.List: %w", err)
 	}
 
-	newMappings := make(map[string]ResolvedApp, len(appList.Items))
+	newMappings := make(map[string][]ResolvedApp, len(appList.Items))
 	for _, item := range appList.Items {
 		destNS := strings.TrimSpace(item.Spec.Destination.Namespace)
 		appName := strings.TrimSpace(item.ObjectMeta.Name)
@@ -145,13 +199,26 @@ func (r *Resolver) Refresh(ctx context.Context) error {
 			continue
 		}
 
-		newMappings[destNS] = ResolvedApp{
+		resolved := ResolvedApp{
 			AppName:           appName,
 			AppNamespace:      item.ObjectMeta.Namespace,
 			TargetNamespace:   destNS,
 			DestinationServer: item.Spec.Destination.Server,
 			DestinationName:   item.Spec.Destination.Name,
 			Project:           item.Spec.Project,
+		}
+
+		// Keep every Application targeting the namespace: ambiguity is surfaced
+		// to the user by pick instead of silently overwriting the earlier entry.
+		duplicate := false
+		for _, existing := range newMappings[destNS] {
+			if existing.AppName == resolved.AppName && existing.AppNamespace == resolved.AppNamespace {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			newMappings[destNS] = append(newMappings[destNS], resolved)
 		}
 	}
 
@@ -194,7 +261,7 @@ func (r *Resolver) loadDiskCache() error {
 	return nil
 }
 
-func (r *Resolver) saveDiskCache(mappings map[string]ResolvedApp) error {
+func (r *Resolver) saveDiskCache(mappings map[string][]ResolvedApp) error {
 	if r.cachePath == "" {
 		return nil
 	}

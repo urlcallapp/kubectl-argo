@@ -21,6 +21,7 @@ const (
 
 var (
 	flagNamespace    string
+	flagApp          string
 	flagArgoConfig   string
 	flagRefreshCache bool
 )
@@ -29,7 +30,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "kubectl-argo",
 	Short: "kubectl wrapper powered by the Argo CD API and RBAC",
-	Long: `kubectl-argo translates standard kubectl commands (get, logs, exec) into
+	Long: `kubectl-argo translates standard kubectl commands (get, logs) into
 Argo CD API calls without requiring a kubeconfig or direct Kubernetes cluster access.
 
 It silently intercepts the -n/--namespace flag and resolves it to the underlying
@@ -57,7 +58,7 @@ Argo CD Application name via the Resolution Engine.`,
 			argocd.WithForceRefresh(flagRefreshCache),
 		)
 
-		resolvedApp, err := resolver.ResolveNamespace(cmd.Context(), flagNamespace)
+		resolvedApp, err := resolver.ResolveNamespace(cmd.Context(), flagNamespace, flagApp)
 		if err != nil {
 			return err
 		}
@@ -82,6 +83,7 @@ func init() {
 	pf := rootCmd.PersistentFlags()
 
 	pf.StringVarP(&flagNamespace, "namespace", "n", "default", "Kubernetes namespace (silently resolved to the target Argo CD Application)")
+	pf.StringVar(&flagApp, "app", "", "Argo CD Application name (required when several Applications target the same namespace)")
 	pf.StringVar(&flagArgoConfig, "argocd-config", "", "Path to Argo CD config file (default \"~/.argocd/config\")")
 	pf.BoolVar(&flagRefreshCache, "refresh-cache", false, "Bypass local namespace cache and refresh from Argo CD ApplicationService.List")
 
