@@ -139,6 +139,32 @@ When you run `kubectl argo <cmd> -n checkout-prod`:
 3. It indexes `spec.destination.namespace` $\rightarrow$ `metadata.name` and resolves `checkout-prod` to `us-east1-prod-payments-team-checkout-service`.
 4. All subsequent API calls (`ResourceTree`, `PodLogs`) transparently execute against the resolved Argo CD Application.
 
+**Ambiguous namespaces:** when several Applications target the same namespace (for example the same namespace on different clusters), the Resolution Engine stops and lists the candidates instead of silently choosing one. Re-run with `--app <application-name>` to select the target explicitly:
+
+```bash
+kubectl argo get pods -n checkout-prod --app us-east1-prod-payments-team-checkout-service
+```
+
+### Supported Commands
+
+`kubectl-argo` currently supports two commands:
+
+| Command | Resource types | Notes |
+| :--- | :--- | :--- |
+| `kubectl argo get` | `pods` (`po`), `svc`, `ing` | `-o wide` adds `NODE`/`HEALTH` columns; `--no-headers` for scripting |
+| `kubectl argo logs` | pods | `-f`, `--tail`, `-c`, `-p`, `--timestamps` |
+
+Other familiar `kubectl` verbs (`describe`, `exec`, `apply`, `get deploy`, `get -A`, ...) are **not** implemented yet; only the resource types above are translated into Argo CD API calls.
+
+**Sample output** (illustrative - not captured from a live Argo CD server):
+
+```console
+$ kubectl argo get pods -n payments-prod
+NAME                          READY   STATUS    RESTARTS   AGE
+web-6d4f8b7c9-x2k9p           1/1     Running   0          3d4h
+api-server-7b9d8c-2xklp       1/1     Running   2          3d4h
+```
+
 ### Command Reference
 
 #### `kubectl argo get`
@@ -279,3 +305,4 @@ Contributions are welcome! Whether you are adding support for new resource kinds
    ```
 3. Place any Argo CD gRPC or REST interaction inside `internal/argocd/` to keep command handlers focused on CLI ergonomics and output formatting.
 4. Open a Pull Request with a clear summary of your changes and example CLI output.
+
