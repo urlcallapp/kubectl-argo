@@ -59,8 +59,6 @@ kubectl argo logs -f --tail=100 web-6d4f8b7c9-x2k9p -n payments-prod
 
 ## Installation
 
-> **Repository note:** This repository is a fork of [ronel99/kubectl-argo](https://github.com/ronel99/kubectl-argo). Install scripts and release binaries are published from the upstream repository, which is why the download URLs below point there.
-
 ### Prerequisites
 
 - **Argo CD CLI** (`argocd`) v2.x+ (for `argocd login --sso`, or an Argo CD API token)
@@ -307,3 +305,4 @@ Contributions are welcome! Whether you are adding support for new resource kinds
    ```
 3. Place any Argo CD gRPC or REST interaction inside `internal/argocd/` to keep command handlers focused on CLI ergonomics and output formatting.
 4. Open a Pull Request with a clear summary of your changes and example CLI output.
+
