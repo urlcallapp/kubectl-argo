@@ -27,8 +27,8 @@ type ResolvedApp struct {
 
 // namespaceCacheFile represents the on-disk JSON cache structure.
 type namespaceCacheFile struct {
-	ServerAddr string                 `json:"server_addr"`
-	UpdatedAt  time.Time              `json:"updated_at"`
+	ServerAddr string                   `json:"server_addr"`
+	UpdatedAt  time.Time                `json:"updated_at"`
 	Mappings   map[string][]ResolvedApp `json:"mappings"`
 }
 
