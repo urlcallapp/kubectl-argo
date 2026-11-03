@@ -137,7 +137,7 @@ When you run `kubectl argo <cmd> -n checkout-prod`:
 1. `kubectl-argo` checks its local namespace index cache at `~/.cache/kubectl-argo/namespace_cache.json` (default TTL: **5 minutes**).
 2. On a cache miss or expiration (or when `--refresh-cache` is passed), it calls Argo CD's `ApplicationService.List` API.
 3. It indexes `spec.destination.namespace` $\rightarrow$ `metadata.name` and resolves `checkout-prod` to `us-east1-prod-payments-team-checkout-service`.
-4. All subsequent API calls (`ResourceTree`, `PodLogs`) transparently execute against the resolved Argo CD Application.
+4. All subsequent API calls (`ResourceTree`, `PodLogs`, terminal exec) transparently execute against the resolved Argo CD Application.
 
 **Ambiguous namespaces:** when several Applications target the same namespace (for example the same namespace on different clusters), the Resolution Engine stops and lists the candidates instead of silently choosing one. Re-run with `--app <application-name>` to select the target explicitly:
 
@@ -147,14 +147,15 @@ kubectl argo get pods -n checkout-prod --app us-east1-prod-payments-team-checkou
 
 ### Supported Commands
 
-`kubectl-argo` currently supports two commands:
+`kubectl-argo` currently supports three commands:
 
 | Command | Resource types | Notes |
 | :--- | :--- | :--- |
 | `kubectl argo get` | `pods` (`po`), `svc`, `ing` | `-o wide` adds `NODE`/`HEALTH` columns; `--no-headers` for scripting |
 | `kubectl argo logs` | pods | `-f`, `--tail`, `-c`, `-p`, `--timestamps` |
+| `kubectl argo exec` | pods | Interactive shell (`-it`) or one-off commands after `--`; `-c` for multi-container pods |
 
-Other familiar `kubectl` verbs (`describe`, `exec`, `apply`, `get deploy`, `get -A`, ...) are **not** implemented yet; only the resource types above are translated into Argo CD API calls.
+Other familiar `kubectl` verbs (`describe`, `apply`, `get deploy`, `get -A`, ...) are **not** implemented yet; only the resource types above are translated into Argo CD API calls.
 
 **Sample output** (illustrative - not captured from a live Argo CD server):
 
@@ -226,6 +227,44 @@ kubectl argo logs -f --tail=50 -c istio-proxy pod/api-server-7b9d8c-2xklp -n my-
 kubectl argo logs -p --timestamps api-server-7b9d8c-2xklp -n my-app
 ```
 
+#### `kubectl argo exec`
+
+Runs a command in a pod container through Argo CD's terminal WebSocket API (`GET /terminal`) - the same endpoint the Argo CD UI uses for its pod terminal. No kubeconfig or direct cluster access is required, and the Argo CD server's RBAC (`applications/get` + `exec/create`) applies to the session.
+
+```bash
+kubectl argo exec (POD | pod/POD) -n <namespace> [-c CONTAINER] [-i] [-t] [-- COMMAND [ARGS...]]
+```
+
+**How it works:**
+- With a `COMMAND` after `--`, the command runs through the container's shell and `kubectl-argo` exits with the remote exit code.
+- Without a command, an interactive shell session opens (requires a terminal). Terminal resizing (`SIGWINCH`) is forwarded live.
+- When `-c` is omitted, the container defaults to the pod's `kubectl.kubernetes.io/default-container` annotation, then its first container (matching `kubectl exec`).
+- The Argo CD server selects the remote shell from its `exec.shells` allow-list (`bash`, `sh` by default); `--shell` requests a specific one.
+- Requires the exec feature enabled on the Argo CD server (`exec.enabled: "true"` in `argocd-cm`) - it is disabled by default.
+
+**Supported Flags:**
+| Flag | Shorthand | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `--container` | `-c` | `""` | Target container (defaults to the pod's default-container annotation, then its first container) |
+| `--stdin` | `-i` | `false` | Pass stdin to the container |
+| `--tty` | `-t` | `false` | Attach to the session as an interactive terminal |
+| `--shell` | | `""` | Request a specific remote shell (must be in the server's `exec.shells` allow-list) |
+
+**Examples:**
+```bash
+# Open an interactive shell in a pod
+kubectl argo exec -it web-6d4f8b7c9-x2k9p -n payments-prod
+
+# Run a single command and exit with its status code
+kubectl argo exec web-6d4f8b7c9-x2k9p -n payments-prod -- ls -l /etc
+
+# Exec into a specific container of a multi-container pod
+kubectl argo exec -it web-6d4f8b7c9-x2k9p -c istio-proxy -n payments-prod
+
+# Pipe stdin into a remote command
+echo "show databases;" | kubectl argo exec -i db-0 -n payments-prod -- mysql -u root
+```
+
 #### Global Persistent Flags
 
 | Flag | Shorthand | Default | Description |
@@ -269,7 +308,7 @@ kubectl-argo/
 
 ## Contributing
 
-Contributions are welcome! Whether you are adding support for new resource kinds, implementing `kubectl argo exec` via Argo CD's terminal WebSocket API, or improving caching behavior, follow the steps below to get started.
+Contributions are welcome! Whether you are adding support for new resource kinds, implementing more `kubectl` verbs (such as `describe` or `apply`), or improving caching behavior, follow the steps below to get started.
 
 ### Development Workflow
 

@@ -30,7 +30,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "kubectl-argo",
 	Short: "kubectl wrapper powered by the Argo CD API and RBAC",
-	Long: `kubectl-argo translates standard kubectl commands (get, logs) into
+	Long: `kubectl-argo translates standard kubectl commands (get, logs, exec) into
 Argo CD API calls without requiring a kubeconfig or direct Kubernetes cluster access.
 
 It silently intercepts the -n/--namespace flag and resolves it to the underlying
@@ -74,6 +74,11 @@ Argo CD Application name via the Resolution Engine.`,
 // Execute runs the root Cobra command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		// Propagate a remote command's exit code (kubectl argo exec).
+		if exitErr, ok := err.(interface{ ExitCode() int }); ok && exitErr.ExitCode() != 0 {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(exitErr.ExitCode())
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
