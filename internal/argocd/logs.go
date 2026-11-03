@@ -47,17 +47,35 @@ func (c *Client) StreamPodLogs(ctx context.Context, resolved *ResolvedApp, opts 
 		return fmt.Errorf("pod name cannot be empty")
 	}
 
-	err := c.streamPodLogsGRPC(ctx, resolved, opts, out)
+	// Fall back to the REST streaming endpoint only when the gRPC stream failed
+	// before delivering any output. Re-streaming from the start after partial
+	// gRPC output would duplicate log lines, so a mid-stream failure is final.
+	counting := &byteCountingWriter{w: out}
+	err := c.streamPodLogsGRPC(ctx, resolved, opts, counting)
 	if err == nil {
 		return nil
 	}
+	if counting.n > 0 {
+		return fmt.Errorf("log stream for pod %q in application %q failed mid-stream: %w", opts.PodName, resolved.AppName, err)
+	}
 
-	// Fallback to the REST streaming endpoint if gRPC stream initialization fails.
 	if restErr := c.streamPodLogsREST(ctx, resolved, opts, out); restErr == nil {
 		return nil
 	}
 
 	return fmt.Errorf("failed to stream logs for pod %q in application %q: %w", opts.PodName, resolved.AppName, err)
+}
+
+// byteCountingWriter records how many bytes reached the underlying writer.
+type byteCountingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (cw *byteCountingWriter) Write(p []byte) (int, error) {
+	n, err := cw.w.Write(p)
+	cw.n += int64(n)
+	return n, err
 }
 
 func (c *Client) streamPodLogsGRPC(ctx context.Context, resolved *ResolvedApp, opts PodLogsOptions, out io.Writer) error {
